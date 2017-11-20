@@ -132,6 +132,55 @@ echo "Transacton ID is $TRX_ID"
 echo
 echo
 
+echo "POST invoke chaincode on peers of Org1 and Org2"
+echo
+TRX_ID=$(curl -s -X POST \
+  http://localhost:4000/channels/mychannel/chaincodes/mycc \
+  -H "authorization: Bearer $ORG1_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+	"fcn":"write",
+	"args":["key","value"]
+}')
+echo "Transacton ID is $TRX_ID"
+echo
+echo
+
+echo "GET read chaincode on peer1 of Org1"
+echo
+curl -s -X GET \
+  "http://localhost:4000/channels/mychannel/chaincodes/mycc?peer=peer1&fcn=read&args=%5B%22key%22%5D" \
+  -H "authorization: Bearer $ORG1_TOKEN" \
+  -H "content-type: application/json"
+echo
+echo
+
+
+echo "POST Adding a test factor"
+echo
+TRX_ID=$(curl -s -X POST \
+  http://localhost:4000/channels/mychannel/chaincodes/mycc \
+  -H "authorization: Bearer $ORG1_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+	"fcn":"storeFactor",
+	"args":["{\"address\" : \"1F1tAaz5x1HUXrCNLbtMDqcw6o5GNn4xqX\", \"email\" : \"lbathen@gmail.com\", \"type\" : \"facial\", \"payload\" : [\"1/1011000100000001\", \"2/1011000100000001\", \"3/1011000100000001\"]}"]
+}')
+echo "Transacton ID is $TRX_ID"
+echo
+echo
+
+echo "GET query a factor on peer1 of Org1"
+echo
+curl -s -X GET \
+  "http://localhost:4000/channels/mychannel/chaincodes/mycc?peer=peer1&fcn=getFactor&args=%5B%221F1tAaz5x1HUXrCNLbtMDqcw6o5GNn4xqX%22%5D" \
+  -H "authorization: Bearer $ORG1_TOKEN" \
+  -H "content-type: application/json"
+echo
+echo
+
+exit 0
+
 echo "GET query chaincode on peer1 of Org1"
 echo
 curl -s -X GET \
@@ -157,6 +206,7 @@ curl -s -X GET http://localhost:4000/channels/mychannel/transactions/$TRX_ID?pee
   -H "content-type: application/json"
 echo
 echo
+
 
 ############################################################################
 ### TODO: What to pass to fetch the Block information

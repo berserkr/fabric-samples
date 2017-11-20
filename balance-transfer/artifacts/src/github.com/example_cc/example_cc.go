@@ -16,8 +16,8 @@ limitations under the License.
 
 package main
 
-
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -31,7 +31,19 @@ var logger = shim.NewLogger("example_cc0")
 type SimpleChaincode struct {
 }
 
-func (t *SimpleChaincode) Init(stub shim.ChaincodeStubInterface) pb.Response  {
+// The address is a traditional bc address
+// The email is for identification purpose, like an account
+// The type can be: facial, password, pin, key, etc...
+// The payload depennds on the type, where it can be a pub key, or bloom filters
+// Bloom filters encoded are as follows: 'order_number/bitstream'
+type Factor struct {
+	Address string   `json:"address"`
+	Email   string   `json:"email"`
+	Type    string   `json:"type"`
+	Payload []string `json:"payload"`
+}
+
+func (t *SimpleChaincode) Init(stub shim.ChaincodeStubInterface) pb.Response {
 	logger.Info("########### example_cc0 Init ###########")
 
 	_, args := stub.GetFunctionAndParameters()
@@ -65,7 +77,6 @@ func (t *SimpleChaincode) Init(stub shim.ChaincodeStubInterface) pb.Response  {
 
 	return shim.Success(nil)
 
-
 }
 
 // Transaction makes payment of X units from A to B
@@ -73,7 +84,7 @@ func (t *SimpleChaincode) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
 	logger.Info("########### example_cc0 Invoke ###########")
 
 	function, args := stub.GetFunctionAndParameters()
-	
+
 	if function == "delete" {
 		// Deletes an entity from its state
 		return t.delete(stub, args)
@@ -86,6 +97,22 @@ func (t *SimpleChaincode) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
 	if function == "move" {
 		// Deletes an entity from its state
 		return t.move(stub, args)
+	}
+	if function == "write" {
+		// Writes onto the state
+		return t.write(stub, args)
+	}
+	if function == "read" {
+		// Reads from teh state
+		return t.read(stub, args)
+	}
+	if function == "storeFactor" {
+		// Reads from teh state
+		return t.storeFactor(stub, args)
+	}
+	if function == "getFactor" {
+		// Reads from teh state
+		return t.getFactor(stub, args)
 	}
 
 	logger.Errorf("Unknown action, check the first argument, must be one of 'delete', 'query', or 'move'. But got: %v", args[0])
@@ -146,7 +173,116 @@ func (t *SimpleChaincode) move(stub shim.ChaincodeStubInterface, args []string) 
 		return shim.Error(err.Error())
 	}
 
-        return shim.Success(nil);
+	return shim.Success(nil)
+}
+
+func (t *SimpleChaincode) write(stub shim.ChaincodeStubInterface, args []string) pb.Response {
+	// must be an invoke
+	var key string   // The key
+	var value string // The data value
+	var err error
+
+	if len(args) != 2 {
+		return shim.Error("Incorrect number of arguments. Expecting 3, function followed by 1 key and 1 value")
+	}
+
+	key = args[0]
+	value = args[1]
+
+	logger.Infof("Writting: key = %s, value = %s\n", key, value)
+
+	// Write the state back to the ledger
+	err = stub.PutState(key, []byte(value))
+	if err != nil {
+		return shim.Error(err.Error())
+	}
+
+	return shim.Success(nil)
+}
+
+func (t *SimpleChaincode) read(stub shim.ChaincodeStubInterface, args []string) pb.Response {
+	// must be an invoke
+	var key string   // The key
+	var value string // The return value
+	var err error
+
+	if len(args) != 1 {
+		return shim.Error("Incorrect number of arguments. Expecting 2, function followed by 1 key")
+	}
+
+	key = args[0]
+
+	logger.Infof("Reading: key = %s\n", key)
+
+	valbytes, err := stub.GetState(key)
+	if err != nil {
+		return shim.Error("Failed to get state")
+	}
+	if valbytes == nil {
+		return shim.Error("Entity not found")
+	}
+	value = string(valbytes)
+
+	logger.Infof(" Response:%s\n", value)
+	return shim.Success(valbytes)
+}
+
+// This method will write a factor to the world state...
+func (t *SimpleChaincode) storeFactor(stub shim.ChaincodeStubInterface, args []string) pb.Response {
+	// must be an invoke
+	var factor Factor // A factor...
+
+	if len(args) != 1 {
+		return shim.Error("Incorrect number of arguments. Expecting 2, function followed by the factor data")
+	}
+
+	// get the bytes from the argument
+	factorAsBytes := []byte(args[0])
+	factor = Factor{}
+	json.Unmarshal(factorAsBytes, &factor)
+
+	fmt.Println("Added", factor)
+
+	logger.Infof("Adding factor with address %s\n", factor.Address)
+
+	// Write the state back to the ledger
+	err := stub.PutState(factor.Address, factorAsBytes)
+	if err != nil {
+		return shim.Error(err.Error())
+	}
+
+	return shim.Success(nil)
+}
+
+// This method will return the factor from the state
+func (t *SimpleChaincode) getFactor(stub shim.ChaincodeStubInterface, args []string) pb.Response {
+	// must be an invoke
+	var address string // The factor address
+	var factor Factor
+
+	if len(args) != 1 {
+		return shim.Error("Incorrect number of arguments. Expecting 2, function followed by 1 address")
+	}
+
+	address = args[0]
+
+	logger.Infof("Reading factor with address = %s\n", address)
+
+	factorAsBytes, err := stub.GetState(address)
+	if err != nil {
+		return shim.Error("Failed to get state")
+	}
+	if factorAsBytes == nil {
+		return shim.Error("Entity not found")
+	}
+
+	factor = Factor{}
+
+	json.Unmarshal(factorAsBytes, &factor)
+	fmt.Println("Returning", factor)
+
+	logger.Infof("Returning factor for %s with address %s\n", factor.Email, factor.Address)
+	return shim.Success(factorAsBytes)
 }
 
 // Deletes an entity from state
