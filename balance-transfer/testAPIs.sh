@@ -104,7 +104,7 @@ curl -s -X POST \
 echo
 echo
 
-echo "POST instantiate chaincode on peer1 of Org1"
+echo "POST instantiate chaincode on Org1"
 echo
 curl -s -X POST \
   http://localhost:4000/channels/mychannel/chaincodes \
@@ -125,10 +125,11 @@ TRX_ID=$(curl -s -X POST \
   -H "authorization: Bearer $ORG1_TOKEN" \
   -H "content-type: application/json" \
   -d '{
+	"peers": ["peer0.org1.example.com","peer0.org2.example.com"],
 	"fcn":"move",
 	"args":["a","b","10"]
 }')
-echo "Transacton ID is $TRX_ID"
+echo "Transaction ID is $TRX_ID"
 echo
 echo
 

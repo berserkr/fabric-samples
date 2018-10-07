@@ -25,7 +25,7 @@ function main {
    # Set ORDERER_PORT_ARGS to the args needed to communicate with the 1st orderer
    IFS=', ' read -r -a OORGS <<< "$ORDERER_ORGS"
    initOrdererVars ${OORGS[0]} 1
-   ORDERER_PORT_ARGS="-o $ORDERER_HOST:7050 --tls --cafile $CA_CHAINFILE"
+   export ORDERER_PORT_ARGS="-o $ORDERER_HOST:7050 --tls --cafile $CA_CHAINFILE --clientauth"
 
    # Convert PEER_ORGS to an array named PORGS
    IFS=', ' read -r -a PORGS <<< "$PEER_ORGS"
@@ -48,7 +48,7 @@ function main {
       initPeerVars $ORG 1
       switchToAdminIdentity
       logr "Updating anchor peers for $PEER_HOST ..."
-      peer channel update -c $CHANNEL_NAME -f $ANCHOR_TX_FILE $ORDERER_PORT_ARGS
+      peer channel update -c $CHANNEL_NAME -f $ANCHOR_TX_FILE $ORDERER_CONN_ARGS
    done
 
    # Install chaincode on the 1st peer in each org
@@ -62,7 +62,7 @@ function main {
    initPeerVars ${PORGS[1]} 1
    switchToAdminIdentity
    logr "Instantiating chaincode on $PEER_HOST ..."
-   peer chaincode instantiate -C $CHANNEL_NAME -n mycc -v 1.0 -c '{"Args":["init","a","100","b","200"]}' -P "$POLICY" $ORDERER_PORT_ARGS
+   peer chaincode instantiate -C $CHANNEL_NAME -n mycc -v 1.0 -c '{"Args":["init","a","100","b","200"]}' -P "$POLICY" $ORDERER_CONN_ARGS
 
    # Query chaincode from the 1st peer of the 1st org
    initPeerVars ${PORGS[0]} 1
@@ -73,7 +73,7 @@ function main {
    initPeerVars ${PORGS[0]} 1
    switchToUserIdentity
    logr "Sending invoke transaction to $PEER_HOST ..."
-   peer chaincode invoke -C $CHANNEL_NAME -n mycc -c '{"Args":["invoke","a","b","10"]}' $ORDERER_PORT_ARGS
+   peer chaincode invoke -C $CHANNEL_NAME -n mycc -c '{"Args":["invoke","a","b","10"]}' $ORDERER_CONN_ARGS
 
    ## Install chaincode on 2nd peer of 2nd org
    initPeerVars ${PORGS[1]} 2
@@ -89,8 +89,7 @@ function main {
    switchToUserIdentity
 
    # Revoke the user and generate CRL using admin's credentials
-   revokeFabricUser
-   generateCRL
+   revokeFabricUserAndGenerateCRL
 
    # Fetch config block
    fetchConfigBlock
@@ -116,7 +115,7 @@ function createChannel {
    initPeerVars ${PORGS[0]} 1
    switchToAdminIdentity
    logr "Creating channel '$CHANNEL_NAME' on $ORDERER_HOST ..."
-   peer channel create --logging-level=DEBUG -c $CHANNEL_NAME -f $CHANNEL_TX_FILE $ORDERER_PORT_ARGS
+   peer channel create --logging-level=DEBUG -c $CHANNEL_NAME -f $CHANNEL_TX_FILE $ORDERER_CONN_ARGS
 }
 
 # Enroll as a fabric admin and join the channel
@@ -158,6 +157,14 @@ function chaincodeQuery {
          logr "Query of channel '$CHANNEL_NAME' on peer '$PEER_HOST' was successful"
          set -e
          return 0
+      else
+         # removed the string "Query Result" from peer chaincode query command result, as a result, have to support both options until the change is merged.
+         VALUE=$(cat log.txt | egrep '^[0-9]+$')
+         if [ $? -eq 0 -a "$VALUE" = "$1" ]; then
+            logr "Query of channel '$CHANNEL_NAME' on peer '$PEER_HOST' was successful"
+            set -e
+            return 0
+         fi
       fi
       echo -n "."
    done
@@ -175,7 +182,7 @@ function queryAsRevokedUser {
       sleep 1
       peer chaincode query -C $CHANNEL_NAME -n mycc -c '{"Args":["query","a"]}' >& log.txt
       if [ $? -ne 0 ]; then
-        err=$(cat log.txt | grep "The certificate has been revoked")
+        err=$(cat log.txt | grep "access denied")
         if [ "$err" != "" ]; then
            logr "Expected error occurred when the revoked user '$USER_NAME' queried the chaincode in the channel '$CHANNEL_NAME'"
            set -e
@@ -208,17 +215,17 @@ function makePolicy  {
 function installChaincode {
    switchToAdminIdentity
    logr "Installing chaincode on $PEER_HOST ..."
-   peer chaincode install -n mycc -v 1.0 -p github.com/hyperledger/fabric-samples/chaincode/abac
+   peer chaincode install -n mycc -v 1.0 -p github.com/hyperledger/fabric-samples/chaincode/abac/go
 }
 
 function fetchConfigBlock {
    logr "Fetching the configuration block of the channel '$CHANNEL_NAME'"
-   peer channel fetch config $CONFIG_BLOCK_FILE -c $CHANNEL_NAME $ORDERER_PORT_ARGS
+   peer channel fetch config $CONFIG_BLOCK_FILE -c $CHANNEL_NAME $ORDERER_CONN_ARGS
 }
 
 function updateConfigBlock {
    logr "Updating the configuration block of the channel '$CHANNEL_NAME'"
-   peer channel update -f $CONFIG_UPDATE_ENVELOPE_FILE -c $CHANNEL_NAME $ORDERER_PORT_ARGS
+   peer channel update -f $CONFIG_UPDATE_ENVELOPE_FILE -c $CHANNEL_NAME $ORDERER_CONN_ARGS
 }
 
 function createConfigUpdatePayloadWithCRL {
@@ -239,8 +246,8 @@ function createConfigUpdatePayloadWithCRL {
    jq .data.data[0].payload.data.config config_block.json > config.json
 
    # Update crl in the config json
-   crl=$(cat $CORE_PEER_MSPCONFIGPATH/crls/crl*.pem | base64 | tr -d '\n')
-   cat config.json | jq '.channel_group.groups.Application.groups.'"${ORG}"'.values.MSP.value.config.revocation_list = ["'"${crl}"'"]' > updated_config.json
+   CRL=$(cat $CORE_PEER_MSPCONFIGPATH/crls/crl*.pem | base64 | tr -d '\n')
+   cat config.json | jq --arg org "$ORG" --arg crl "$CRL" '.channel_group.groups.Application.groups[$org].values.MSP.value.config.revocation_list = [$crl]' > updated_config.json
 
    # Create the config diff protobuf
    curl -X POST --data-binary @config.json $CTLURL/protolator/encode/common.Config > config.pb
@@ -267,6 +274,7 @@ function finish {
    else
       logr "Tests did not complete successfully; see $RUN_LOGFILE for more details"
       touch /$RUN_FAIL_FILE
+      exit 1
    fi
 }
 

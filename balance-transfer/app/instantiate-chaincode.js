@@ -14,18 +14,15 @@
  *  limitations under the License.
  */
 'use strict';
-var path = require('path');
-var fs = require('fs');
 var util = require('util');
-var hfc = require('fabric-client');
 var helper = require('./helper.js');
 var logger = helper.getLogger('instantiate-chaincode');
 
-var instantiateChaincode = async function(channelName, chaincodeName, chaincodeVersion, functionName, chaincodeType, args, username, org_name) {
+var instantiateChaincode = async function(peers, channelName, chaincodeName, chaincodeVersion, functionName, chaincodeType, args, username, org_name) {
 	logger.debug('\n\n============ Instantiate chaincode on channel ' + channelName +
 		' ============\n');
 	var error_message = null;
-	var eventhubs_in_use = [];
+
 	try {
 		// first setup the client for this org
 		var client = await helper.getClientForOrg(org_name, username);
@@ -45,11 +42,24 @@ var instantiateChaincode = async function(channelName, chaincodeName, chaincodeV
 
 		// send proposal to endorser
 		var request = {
+			targets : peers,
 			chaincodeId: chaincodeName,
 			chaincodeType: chaincodeType,
 			chaincodeVersion: chaincodeVersion,
 			args: args,
-			txId: tx_id
+			txId: tx_id,
+
+			// Use this to demonstrate the following policy:
+			// The policy can be fulfilled when members from both orgs signed.
+			'endorsement-policy': {
+			        identities: [
+					{ role: { name: 'member', mspId: 'Org1MSP' }},
+					{ role: { name: 'member', mspId: 'Org2MSP' }}
+			        ],
+			        policy: {
+					'2-of':[{ 'signed-by': 0 }, { 'signed-by': 1 }]
+			        }
+		        }
 		};
 
 		if (functionName)
@@ -83,30 +93,28 @@ var instantiateChaincode = async function(channelName, chaincodeName, chaincodeV
 			logger.info(util.format(
 				'Successfully sent Proposal and received ProposalResponse: Status - %s, message - "%s", metadata - "%s", endorsement signature: %s',
 				proposalResponses[0].response.status, proposalResponses[0].response.message,
-				proposalResponses[0].response.payload, proposalResponses[0].endorsement
-				.signature));
+				proposalResponses[0].response.payload, proposalResponses[0].endorsement.signature));
 
-			// tell each peer to join and wait for the event hub of each peer to tell us
-			// that the channel has been created on each peer
+			// wait for the channel-based event hub to tell us that the
+			// instantiate transaction was committed on the peer
 			var promises = [];
-			let event_hubs = client.getEventHubsForOrg(org_name);
+			let event_hubs = channel.getChannelEventHubsForOrg();
 			logger.debug('found %s eventhubs for this organization %s',event_hubs.length, org_name);
 			event_hubs.forEach((eh) => {
 				let instantiateEventPromise = new Promise((resolve, reject) => {
 					logger.debug('instantiateEventPromise - setting up event');
 					let event_timeout = setTimeout(() => {
-						let message = 'REQUEST_TIMEOUT:' + eh._ep._endpoint.addr;
+						let message = 'REQUEST_TIMEOUT:' + eh.getPeerAddr();
 						logger.error(message);
 						eh.disconnect();
-						reject(new Error(message));
 					}, 60000);
-					eh.registerTxEvent(deployId, (tx, code) => {
-						logger.info('The chaincode instantiate transaction has been committed on peer %s',eh._ep._endpoint.addr);
+					eh.registerTxEvent(deployId, (tx, code, block_num) => {
+						logger.info('The chaincode instantiate transaction has been committed on peer %s',eh.getPeerAddr());
+						logger.info('Transaction %s has status of %s in blocl %s', tx, code, block_num);
 						clearTimeout(event_timeout);
-						eh.unregisterTxEvent(deployId);
 
 						if (code !== 'VALID') {
-							let message = until.format('The chaincode instantiate transaction was invalid, code:%s',code);
+							let message = util.format('The chaincode instantiate transaction was invalid, code:%s',code);
 							logger.error(message);
 							reject(new Error(message));
 						} else {
@@ -116,22 +124,26 @@ var instantiateChaincode = async function(channelName, chaincodeName, chaincodeV
 						}
 					}, (err) => {
 						clearTimeout(event_timeout);
-						eh.unregisterTxEvent(deployId);
-						let message = 'Problem setting up the event hub :'+ err.toString();
-						logger.error(message);
-						reject(new Error(message));
-					});
+						logger.error(err);
+						reject(err);
+					},
+						// the default for 'unregister' is true for transaction listeners
+						// so no real need to set here, however for 'disconnect'
+						// the default is false as most event hubs are long running
+						// in this use case we are using it only once
+						{unregister: true, disconnect: true}
+					);
+					eh.connect();
 				});
 				promises.push(instantiateEventPromise);
-				eh.connect();
-				eventhubs_in_use.push(eh);
 			});
 
 			var orderer_request = {
-				txId: tx_id, //must includethe transaction id so that the outbound
+				txId: tx_id, // must include the transaction id so that the outbound
 				             // transaction to the orderer will be signed by the admin
 							 // id as was the proposal above, notice that transactionID
-							 // generated above was based on the admin id not userContext.
+							 // generated above was based on the admin id not the current
+							 // user assigned to the 'client' instance.
 				proposalResponses: proposalResponses,
 				proposal: proposal
 			};
@@ -153,7 +165,7 @@ var instantiateChaincode = async function(channelName, chaincodeName, chaincodeV
 			for(let i in results) {
 				let event_hub_result = results[i];
 				let event_hub = event_hubs[i];
-				logger.debug('Event results for event hub :%s',event_hub._ep._endpoint.addr);
+				logger.debug('Event results for event hub :%s',event_hub.getPeerAddr());
 				if(typeof event_hub_result === 'string') {
 					logger.debug(event_hub_result);
 				} else {
@@ -170,14 +182,9 @@ var instantiateChaincode = async function(channelName, chaincodeName, chaincodeV
 		error_message = error.toString();
 	}
 
-	// need to shutdown open event streams
-	eventhubs_in_use.forEach((eh) => {
-		eh.disconnect();
-	});
-
 	if (!error_message) {
 		let message = util.format(
-			'Successfully instantiate chaingcode in organization %s to the channel \'%s\'',
+			'Successfully instantiate chaincode in organization %s to the channel \'%s\'',
 			org_name, channelName);
 		logger.info(message);
 		// build a response to send back to the REST caller

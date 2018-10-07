@@ -45,12 +45,12 @@ function registerOrdererIdentities {
       while [[ "$COUNT" -le $NUM_ORDERERS ]]; do
          initOrdererVars $ORG $COUNT
          log "Registering $ORDERER_NAME with $CA_NAME"
-         fabric-ca-client register -d --id.name $ORDERER_NAME --id.secret $ORDERER_PASS
+         fabric-ca-client register -d --id.name $ORDERER_NAME --id.secret $ORDERER_PASS --id.type orderer
          COUNT=$((COUNT+1))
       done
       log "Registering admin identity with $CA_NAME"
-      # The admin identity has the "hf.admin" attribute which is added to ECert by default
-      fabric-ca-client register -d --id.name $ADMIN_NAME --id.secret $ADMIN_PASS --id.attrs "hf.admin=true:ecert"
+      # The admin identity has the "admin" attribute which is added to ECert by default
+      fabric-ca-client register -d --id.name $ADMIN_NAME --id.secret $ADMIN_PASS --id.attrs "admin=true:ecert"
    done
 }
 
@@ -63,12 +63,12 @@ function registerPeerIdentities {
       while [[ "$COUNT" -le $NUM_PEERS ]]; do
          initPeerVars $ORG $COUNT
          log "Registering $PEER_NAME with $CA_NAME"
-         fabric-ca-client register -d --id.name $PEER_NAME --id.secret $PEER_PASS
+         fabric-ca-client register -d --id.name $PEER_NAME --id.secret $PEER_PASS --id.type peer
          COUNT=$((COUNT+1))
       done
       log "Registering admin identity with $CA_NAME"
-      # The admin identity has the "hf.admin" attribute which is added to ECert by default
-      fabric-ca-client register -d --id.name $ADMIN_NAME --id.secret $ADMIN_PASS --id.attrs "hf.Revoker=true,hf.GenCRL=true,hf.admin=true:ecert,abac.init=true:ecert"
+      # The admin identity has the "admin" attribute which is added to ECert by default
+      fabric-ca-client register -d --id.name $ADMIN_NAME --id.secret $ADMIN_PASS --id.attrs "hf.Registrar.Roles=client,hf.Registrar.Attributes=*,hf.Revoker=true,hf.GenCRL=true,admin=true:ecert,abac.init=true:ecert"
       log "Registering user identity with $CA_NAME"
       fabric-ca-client register -d --id.name $USER_NAME --id.secret $USER_PASS
    done
@@ -124,7 +124,42 @@ function printPeerOrg {
 
 function makeConfigTxYaml {
    {
-   echo "################################################################################
+   echo "
+################################################################################
+#
+#   Section: Organizations
+#
+#   - This section defines the different organizational identities which will
+#   be referenced later in the configuration.
+#
+################################################################################
+Organizations:"
+
+   for ORG in $ORDERER_ORGS; do
+      printOrdererOrg $ORG
+   done
+
+   for ORG in $PEER_ORGS; do
+      printPeerOrg $ORG 1
+   done
+
+   echo "
+################################################################################
+#
+#   SECTION: Application
+#
+#   This section defines the values to encode into a config transaction or
+#   genesis block for application related parameters
+#
+################################################################################
+Application: &ApplicationDefaults
+
+    # Organizations is the list of orgs which are defined as participants on
+    # the application side of the network
+    Organizations:
+"
+   echo "
+################################################################################
 #
 #   Profile
 #
@@ -207,41 +242,6 @@ Profiles:
       initOrgVars $ORG
       echo "        - *${ORG_CONTAINER_NAME}"
    done
-
-   echo "
-################################################################################
-#
-#   Section: Organizations
-#
-#   - This section defines the different organizational identities which will
-#   be referenced later in the configuration.
-#
-################################################################################
-Organizations:"
-
-   for ORG in $ORDERER_ORGS; do
-      printOrdererOrg $ORG
-   done
-
-   for ORG in $PEER_ORGS; do
-      printPeerOrg $ORG 1
-   done
-
-   echo "
-################################################################################
-#
-#   SECTION: Application
-#
-#   This section defines the values to encode into a config transaction or
-#   genesis block for application related parameters
-#
-################################################################################
-Application: &ApplicationDefaults
-
-    # Organizations is the list of orgs which are defined as participants on
-    # the application side of the network
-    Organizations:
-"
 
    } > /etc/hyperledger/fabric/configtx.yaml
    # Copy it to the data directory to make debugging easier

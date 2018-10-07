@@ -154,7 +154,6 @@ orderers:
     # they will be passed in as-is to gRPC client constructor
     grpcOptions:
       ssl-target-name-override: orderer.example.com
-      grpc-max-send-message-length: 15
 
     tlsCACerts:
       path: artifacts/channel/crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/tls/ca.crt
@@ -168,9 +167,6 @@ peers:
     # this URL is used to send endorsement and query requests
     url: grpcs://localhost:7051
 
-    # this URL is used to connect the EventHub and registering event listeners
-    eventUrl: grpcs://localhost:7053
-
     grpcOptions:
       ssl-target-name-override: peer0.org1.example.com
     tlsCACerts:
@@ -178,7 +174,6 @@ peers:
 
   peer1.org1.example.com:
     url: grpcs://localhost:7056
-    eventUrl: grpcs://localhost:7058
     grpcOptions:
       ssl-target-name-override: peer1.org1.example.com
     tlsCACerts:
@@ -186,7 +181,6 @@ peers:
 
   peer0.org2.example.com:
     url: grpcs://localhost:8051
-    eventUrl: grpcs://localhost:8053
     grpcOptions:
       ssl-target-name-override: peer0.org2.example.com
     tlsCACerts:
